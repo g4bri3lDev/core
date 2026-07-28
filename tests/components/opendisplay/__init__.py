@@ -1,5 +1,6 @@
 """Tests for the OpenDisplay integration."""
 
+import struct
 from time import time
 
 from bleak.backends.scanner import AdvertisementData
@@ -14,6 +15,8 @@ from opendisplay import (
     PowerOption,
     SecurityConfig,
     SystemConfig,
+    TouchController,
+    TouchIcType,
 )
 
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
@@ -212,6 +215,56 @@ def make_button_device_config(binary_inputs: list[BinaryInputs]) -> GlobalConfig
         displays=DEVICE_CONFIG.displays,
         binary_inputs=binary_inputs,
     )
+
+
+def make_touch_controller(
+    instance_number: int = 0,
+    start_byte: int = 0,
+) -> TouchController:
+    """Create a minimal TouchController config entry."""
+    return TouchController(
+        instance_number=instance_number,
+        touch_ic_type=TouchIcType.GT911.value,
+        bus_id=0,
+        i2c_addr_7bit=0x5D,
+        int_pin=0xFF,
+        rst_pin=0xFF,
+        display_instance=0,
+        flags=0,
+        poll_interval_ms=0,
+        touch_data_start_byte=start_byte,
+        reserved=b"\x00" * 8,
+    )
+
+
+def make_touch_device_config(
+    touch_controllers: list[TouchController],
+) -> GlobalConfig:
+    """Return a GlobalConfig with the given touch_controllers list."""
+    return GlobalConfig(
+        system=DEVICE_CONFIG.system,
+        manufacturer=DEVICE_CONFIG.manufacturer,
+        power=DEVICE_CONFIG.power,
+        displays=DEVICE_CONFIG.displays,
+        touch_controllers=touch_controllers,
+    )
+
+
+def make_touch_dynamic_data(
+    contact_count: int,
+    x: int = 0,
+    y: int = 0,
+    start_byte: int = 0,
+    track_id: int = 0,
+) -> bytes:
+    """Build an 11-byte dynamic block containing one 5-byte touch report.
+
+    contact_count 1-5 means touching, 6 means released.
+    """
+    block = bytearray(11)
+    block[start_byte] = (track_id << 4) | contact_count
+    struct.pack_into("<HH", block, start_byte + 1, x, y)
+    return bytes(block)
 
 
 VALID_SERVICE_INFO = make_service_info()

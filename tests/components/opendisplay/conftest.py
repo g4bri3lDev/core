@@ -19,6 +19,8 @@ from . import (
     TEST_TITLE,
     make_binary_inputs,
     make_button_device_config,
+    make_touch_controller,
+    make_touch_device_config,
 )
 
 from tests.common import MockConfigEntry
@@ -148,6 +150,35 @@ def mock_multi_instance_config_entry(
         [
             make_binary_inputs(instance_number=0, byte_index=0, input_flags=0x03),
             make_binary_inputs(instance_number=1, byte_index=1, input_flags=0x01),
+        ]
+    )
+    return MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=TEST_ADDRESS,
+        title=TEST_TITLE,
+        data={},
+    )
+
+
+@pytest.fixture
+def mock_touch_config_entry(mock_opendisplay_device: MagicMock) -> MockConfigEntry:
+    """Create a mock config entry for a device with one touch controller."""
+    mock_opendisplay_device.config = make_touch_device_config([make_touch_controller()])
+    return MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=TEST_ADDRESS,
+        title=TEST_TITLE,
+        data={},
+    )
+
+
+@pytest.fixture
+def mock_two_touch_config_entry(mock_opendisplay_device: MagicMock) -> MockConfigEntry:
+    """Create a mock config entry with two touch controllers on separate byte offsets."""
+    mock_opendisplay_device.config = make_touch_device_config(
+        [
+            make_touch_controller(instance_number=0, start_byte=0),
+            make_touch_controller(instance_number=1, start_byte=5),
         ]
     )
     return MockConfigEntry(

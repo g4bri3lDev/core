@@ -62,6 +62,18 @@
             }
           }
         }
+      },
+      "touch": {
+        "name": "Touch {number}",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "touch_down": "Touch down",
+              "touch_move": "Touch move",
+              "touch_up": "Touch up"
+            }
+          }
+        }
       }
     },
     "sensor": {

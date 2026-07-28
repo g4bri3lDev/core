@@ -1,4 +1,4 @@
-"""Event platform for OpenDisplay devices — button press/release events."""
+"""Event platform for OpenDisplay devices — button press/release and touch events."""
 
 from dataclasses import dataclass
 from typing import override
@@ -26,21 +26,40 @@ class OpenDisplayEventEntityDescription(EventEntityDescription):
     button_id: int
 
 
+@dataclass(frozen=True, kw_only=True)
+class OpenDisplayTouchEntityDescription(EventEntityDescription):
+    """Describes an OpenDisplay touch event entity."""
+
+    instance: int
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: OpenDisplayConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up OpenDisplay event entities from binary_inputs device config."""
+    """Set up OpenDisplay event entities from binary_inputs and touch_controllers."""
     coordinator = entry.runtime_data.coordinator
+    entity_registry = er.async_get(hass)
 
-    descriptions: list[OpenDisplayEventEntityDescription] = []
+    def _remove_stale(prefix: str, active_unique_ids: set[str]) -> None:
+        for entity_entry in er.async_entries_for_config_entry(
+            entity_registry, entry.entry_id
+        ):
+            if (
+                entity_entry.domain == "event"
+                and entity_entry.unique_id.startswith(prefix)
+                and entity_entry.unique_id not in active_unique_ids
+            ):
+                entity_registry.async_remove(entity_entry.entity_id)
+
+    button_descriptions: list[OpenDisplayEventEntityDescription] = []
     button_number = 0
     for bi in entry.runtime_data.device_config.binary_inputs:
         for button_id in range(8):  # input_flags is a bitmask over 8 pin slots
             if bi.input_flags & (1 << button_id):
                 button_number += 1
-                descriptions.append(
+                button_descriptions.append(
                     OpenDisplayEventEntityDescription(
                         key=f"button_{bi.instance_number}_{button_id}",
                         translation_key="button",
@@ -52,21 +71,35 @@ async def async_setup_entry(
                     )
                 )
 
-    active_unique_ids = {f"{coordinator.address}-{d.key}" for d in descriptions}
-    button_unique_id_prefix = f"{coordinator.address}-button_"
-    entity_registry = er.async_get(hass)
-    for entity_entry in er.async_entries_for_config_entry(
-        entity_registry, entry.entry_id
-    ):
-        if (
-            entity_entry.domain == "event"
-            and entity_entry.unique_id.startswith(button_unique_id_prefix)
-            and entity_entry.unique_id not in active_unique_ids
-        ):
-            entity_registry.async_remove(entity_entry.entity_id)
+    touch_descriptions = [
+        OpenDisplayTouchEntityDescription(
+            key=f"touch_{tc.instance_number}",
+            translation_key="touch",
+            translation_placeholders={"number": str(number)},
+            event_types=["touch_down", "touch_move", "touch_up"],
+            instance=tc.instance_number,
+        )
+        for number, tc in enumerate(
+            entry.runtime_data.device_config.touch_controllers, 1
+        )
+    ]
+
+    _remove_stale(
+        f"{coordinator.address}-button_",
+        {f"{coordinator.address}-{d.key}" for d in button_descriptions},
+    )
+    _remove_stale(
+        f"{coordinator.address}-touch_",
+        {f"{coordinator.address}-{d.key}" for d in touch_descriptions},
+    )
 
     async_add_entities(
-        OpenDisplayEventEntity(coordinator, description) for description in descriptions
+        OpenDisplayEventEntity(coordinator, description)
+        for description in button_descriptions
+    )
+    async_add_entities(
+        OpenDisplayTouchEventEntity(coordinator, description)
+        for description in touch_descriptions
     )
 
 
@@ -89,5 +122,24 @@ class OpenDisplayEventEntity(OpenDisplayEntity, EventEntity):
                     and event.event_type in self.event_types
                 ):
                     self._trigger_event(event.event_type)
+            self._last_processed_data = data
+            self.async_write_ha_state()
+
+
+class OpenDisplayTouchEventEntity(OpenDisplayEntity, EventEntity):
+    """A touch event entity for an OpenDisplay device."""
+
+    entity_description: OpenDisplayTouchEntityDescription
+    _last_processed_data: object | None = None
+
+    @callback
+    @override
+    def _handle_coordinator_update(self) -> None:
+        """Fire events for touch transitions reported by this coordinator update."""
+        data = self.coordinator.data
+        if data is not None and data is not self._last_processed_data:
+            for event in data.touch_events:
+                if event.instance == self.entity_description.instance:
+                    self._trigger_event(event.event_type, {"x": event.x, "y": event.y})
             self._last_processed_data = data
             self.async_write_ha_state()

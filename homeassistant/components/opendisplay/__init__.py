@@ -122,7 +122,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: OpenDisplayConfigEntry) 
     if TYPE_CHECKING:
         assert device_config is not None
 
-    coordinator = OpenDisplayCoordinator(hass, address)
+    coordinator = OpenDisplayCoordinator(hass, address, device_config.touch_controllers)
 
     manufacturer = device_config.manufacturer
     display = device_config.displays[0]

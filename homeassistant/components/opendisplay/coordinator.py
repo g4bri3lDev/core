@@ -5,7 +5,13 @@ import logging
 from typing import override
 
 from opendisplay import MANUFACTURER_ID, AdvertisementTracker, parse_advertisement
-from opendisplay.models.advertisement import AdvertisementData, ButtonChangeEvent
+from opendisplay.models.advertisement import (
+    AdvertisementData,
+    ButtonChangeEvent,
+    TouchChangeEvent,
+    TouchTracker,
+)
+from opendisplay.models.config import TouchController
 
 from homeassistant.components.bluetooth import (
     BluetoothChange,
@@ -27,12 +33,18 @@ class OpenDisplayUpdate:
     address: str
     advertisement: AdvertisementData
     button_events: list[ButtonChangeEvent] = field(default_factory=list)
+    touch_events: list[TouchChangeEvent] = field(default_factory=list)
 
 
 class OpenDisplayCoordinator(PassiveBluetoothDataUpdateCoordinator):
     """Coordinator for passive BLE advertisement updates from an OpenDisplay device."""
 
-    def __init__(self, hass: HomeAssistant, address: str) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        address: str,
+        touch_controllers: list[TouchController],
+    ) -> None:
         """Initialize the coordinator."""
         super().__init__(
             hass,
@@ -43,6 +55,10 @@ class OpenDisplayCoordinator(PassiveBluetoothDataUpdateCoordinator):
         )
         self.data: OpenDisplayUpdate | None = None
         self._tracker: AdvertisementTracker = AdvertisementTracker()
+        self._touch_trackers: list[TouchTracker] = [
+            TouchTracker(tc.instance_number, tc.touch_data_start_byte)
+            for tc in touch_controllers
+        ]
 
     @callback
     @override
@@ -82,10 +98,16 @@ class OpenDisplayCoordinator(PassiveBluetoothDataUpdateCoordinator):
             )
         else:
             button_events = self._tracker.update(service_info.address, advertisement)
+            touch_events: list[TouchChangeEvent] = []
+            for touch_tracker in self._touch_trackers:
+                touch_events.extend(
+                    touch_tracker.update(service_info.address, advertisement)
+                )
             self.data = OpenDisplayUpdate(
                 address=service_info.address,
                 advertisement=advertisement,
                 button_events=button_events,
+                touch_events=touch_events,
             )
 
         super()._async_handle_bluetooth_event(service_info, change)

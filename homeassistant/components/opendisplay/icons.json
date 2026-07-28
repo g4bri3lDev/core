@@ -1,4 +1,11 @@
 {
+  "entity": {
+    "event": {
+      "touch": {
+        "default": "mdi:gesture-tap"
+      }
+    }
+  },
   "services": {
     "upload_image": {
       "service": "mdi:image-move"
