@@ -6,6 +6,7 @@ from typing import override
 
 from opendisplay import MANUFACTURER_ID, AdvertisementTracker, parse_advertisement
 from opendisplay.models.advertisement import AdvertisementData, ButtonChangeEvent
+from opendisplay.models.config import BinaryInputs
 
 from homeassistant.components.bluetooth import (
     BluetoothChange,
@@ -32,8 +33,16 @@ class OpenDisplayUpdate:
 class OpenDisplayCoordinator(PassiveBluetoothDataUpdateCoordinator):
     """Coordinator for passive BLE advertisement updates from an OpenDisplay device."""
 
-    def __init__(self, hass: HomeAssistant, address: str) -> None:
-        """Initialize the coordinator."""
+    def __init__(
+        self, hass: HomeAssistant, address: str, binary_inputs: list[BinaryInputs]
+    ) -> None:
+        """Initialize the coordinator.
+
+        The bytes of the advertisement's dynamic block that do not belong to a
+        binary input carry touch coordinates and sensor readings, which decode
+        into valid-looking button reports. The tracker is therefore limited to
+        the bytes the device config declares as buttons.
+        """
         super().__init__(
             hass,
             _LOGGER,
@@ -42,7 +51,13 @@ class OpenDisplayCoordinator(PassiveBluetoothDataUpdateCoordinator):
             connectable=True,
         )
         self.data: OpenDisplayUpdate | None = None
-        self._tracker: AdvertisementTracker = AdvertisementTracker()
+        self._tracker: AdvertisementTracker = AdvertisementTracker(
+            [
+                index
+                for binary_input in binary_inputs
+                if (index := binary_input.published_button_byte_index) is not None
+            ]
+        )
 
     @callback
     @override

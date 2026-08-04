@@ -189,6 +189,34 @@ async def test_button_up_event_fired(
     assert state.attributes.get("event_type") == "button_up"
 
 
+async def test_no_button_events_for_unclaimed_bytes(
+    hass: HomeAssistant,
+    mock_button_config_entry: MockConfigEntry,
+) -> None:
+    """Dynamic block bytes that no binary input claims produce no button events."""
+    mock_button_config_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(mock_button_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # First advertisement — seeds tracker state (no events emitted)
+    inject_bluetooth_service_info(hass, make_v1_service_info())
+    await hass.async_block_till_done()
+
+    coordinator = mock_button_config_entry.runtime_data.coordinator
+
+    # Byte 3 belongs to a touch controller or a sensor, not to the configured
+    # button on byte 0, yet it decodes into a valid-looking button report.
+    inject_bluetooth_service_info(
+        hass, make_v1_service_info(b"\x00\x00\x00\x80" + b"\x00" * 7)
+    )
+    await hass.async_block_till_done()
+    assert coordinator.data.button_events == []
+
+    inject_bluetooth_service_info(hass, make_v1_service_info(b"\x80" + b"\x00" * 10))
+    await hass.async_block_till_done()
+    assert [event.byte_index for event in coordinator.data.button_events] == [0]
+
+
 async def test_no_event_for_wrong_button_id(
     hass: HomeAssistant,
     mock_two_button_config_entry: MockConfigEntry,
