@@ -1,4 +1,4 @@
-"""Test the OpenDisplay upload_image service."""
+"""Test the OpenDisplay actions."""
 
 import asyncio
 from collections.abc import Generator
@@ -11,6 +11,7 @@ from opendisplay import (
     AuthenticationFailedError,
     AuthenticationRequiredError,
     BLEConnectionError,
+    BuzzerActivateConfig,
 )
 from PIL import Image as PILImage
 import pytest
@@ -22,7 +23,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import device_registry as dr
 
-from . import ENCRYPTION_KEY
+from . import ENCRYPTION_KEY, make_buzzer_device_config
 
 from tests.common import MockConfigEntry
 from tests.test_util.aiohttp import AiohttpClientMocker
@@ -54,6 +55,19 @@ def mock_resolve_media(tmp_path: Path) -> Generator[MagicMock]:
         return_value=mock_media,
     ):
         yield mock_media
+
+
+@pytest.fixture
+async def mock_buzzer_device(
+    hass: HomeAssistant,
+    setup_entry: None,
+    mock_config_entry: MockConfigEntry,
+    mock_opendisplay_device: MagicMock,
+) -> None:
+    """Reload the entry as a device that has one buzzer configured."""
+    mock_opendisplay_device.config = make_buzzer_device_config()
+    await hass.config_entries.async_reload(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
 
 
 def _device_id(hass: HomeAssistant, mock_config_entry: MockConfigEntry) -> str:
@@ -394,3 +408,154 @@ async def test_upload_image_invalid_encryption_key_format(
 
     flows = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
     assert any(f["context"]["source"] == config_entries.SOURCE_REAUTH for f in flows)
+
+
+@pytest.mark.usefixtures("mock_buzzer_device")
+async def test_activate_buzzer(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_opendisplay_device: MagicMock,
+) -> None:
+    """Test that activate_buzzer sends a single tone to the requested instance."""
+    device_id = _device_id(hass, mock_config_entry)
+
+    await hass.services.async_call(
+        DOMAIN,
+        "activate_buzzer",
+        {
+            "device_id": device_id,
+            "frequency_hz": 2000,
+            "duration_ms": 250,
+            "repeats": 3,
+        },
+        blocking=True,
+    )
+
+    mock_opendisplay_device.activate_buzzer.assert_called_once_with(
+        0,
+        BuzzerActivateConfig.single_tone(frequency_hz=2000, duration_ms=250, repeats=3),
+    )
+
+
+async def test_activate_buzzer_without_buzzers(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_opendisplay_device: MagicMock,
+) -> None:
+    """Test that a device without a buzzer rejects the action."""
+    device_id = _device_id(hass, mock_config_entry)
+
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            "activate_buzzer",
+            {"device_id": device_id},
+            blocking=True,
+        )
+
+    mock_opendisplay_device.activate_buzzer.assert_not_called()
+
+
+@pytest.mark.usefixtures("mock_buzzer_device")
+@pytest.mark.parametrize(
+    "data",
+    [
+        pytest.param({"instance": 4}, id="instance_too_high"),
+        pytest.param({"frequency_hz": 12001}, id="frequency_too_high"),
+        pytest.param({"duration_ms": 4}, id="duration_too_short"),
+        pytest.param({"duration_ms": 1276}, id="duration_too_long"),
+        pytest.param({"repeats": 0}, id="repeats_too_few"),
+    ],
+)
+async def test_activate_buzzer_invalid_values(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    data: dict[str, int],
+) -> None:
+    """Test that out-of-range values are rejected by the schema."""
+    device_id = _device_id(hass, mock_config_entry)
+
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(
+            DOMAIN,
+            "activate_buzzer",
+            {"device_id": device_id, **data},
+            blocking=True,
+        )
+
+
+@pytest.mark.usefixtures("mock_buzzer_device")
+async def test_activate_buzzer_error(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_opendisplay_device: MagicMock,
+) -> None:
+    """Test that a BLE failure surfaces as a translated error."""
+    device_id = _device_id(hass, mock_config_entry)
+    mock_opendisplay_device.activate_buzzer.side_effect = BLEConnectionError("boom")
+
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call(
+            DOMAIN,
+            "activate_buzzer",
+            {"device_id": device_id},
+            blocking=True,
+        )
+
+
+@pytest.mark.usefixtures("mock_buzzer_device")
+async def test_actions_do_not_connect_concurrently(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_opendisplay_device: MagicMock,
+    mock_resolve_media: MagicMock,
+) -> None:
+    """Test that a second action waits for an in-flight one to release the device."""
+    device_id = _device_id(hass, mock_config_entry)
+    uploading = asyncio.Event()
+    finish_upload = asyncio.Event()
+
+    async def _blocking_upload(*args: object, **kwargs: object) -> None:
+        uploading.set()
+        await finish_upload.wait()
+
+    mock_opendisplay_device.upload_image.side_effect = _blocking_upload
+
+    upload = hass.async_create_task(
+        hass.services.async_call(
+            DOMAIN,
+            "upload_image",
+            {
+                "device_id": device_id,
+                "image": {
+                    "media_content_id": "media-source://local/test.png",
+                    "media_content_type": "image/png",
+                },
+            },
+            blocking=True,
+        )
+    )
+    await uploading.wait()
+
+    buzzer = hass.async_create_task(
+        hass.services.async_call(
+            DOMAIN,
+            "activate_buzzer",
+            {"device_id": device_id},
+            blocking=True,
+        )
+    )
+    try:
+        # Give the buzzer call time to reach the lock it must wait on
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+        assert not buzzer.done()
+        mock_opendisplay_device.activate_buzzer.assert_not_called()
+    finally:
+        finish_upload.set()
+
+    await upload
+    await buzzer
+
+    mock_opendisplay_device.activate_buzzer.assert_called_once()

@@ -74,6 +74,9 @@
     "authentication_error": {
       "message": "Authentication failed. Please update the encryption key."
     },
+    "buzzer_error": {
+      "message": "Failed to activate the buzzer."
+    },
     "config_entry_not_found": {
       "message": "Config entry not found: `{address}`"
     },
@@ -85,6 +88,9 @@
     },
     "media_download_error": {
       "message": "Failed to download media: {error}"
+    },
+    "no_buzzers": {
+      "message": "Device `{device_id}` has no buzzer configured."
     },
     "setup_connection_error": {
       "message": "Failed to connect to OpenDisplay device."
@@ -123,6 +129,32 @@
     }
   },
   "services": {
+    "activate_buzzer": {
+      "description": "Plays a tone on a buzzer of an OpenDisplay device.",
+      "fields": {
+        "device_id": {
+          "description": "The OpenDisplay device to play the tone on.",
+          "name": "Device"
+        },
+        "duration_ms": {
+          "description": "How long the tone is played.",
+          "name": "Duration"
+        },
+        "frequency_hz": {
+          "description": "The tone frequency. 0 is silence.",
+          "name": "Frequency"
+        },
+        "instance": {
+          "description": "Which buzzer to use on devices that have more than one.",
+          "name": "Buzzer instance"
+        },
+        "repeats": {
+          "description": "How many times the tone is played.",
+          "name": "Repeats"
+        }
+      },
+      "name": "Activate buzzer"
+    },
     "upload_image": {
       "description": "Uploads an image to an OpenDisplay device.",
       "fields": {

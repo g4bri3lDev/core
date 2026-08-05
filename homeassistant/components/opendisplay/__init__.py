@@ -2,7 +2,7 @@
 
 import asyncio
 import contextlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from opendisplay import (
@@ -50,6 +50,9 @@ class OpenDisplayRuntimeData:
     device_config: GlobalConfig
     is_flex: bool
     upload_task: asyncio.Task | None = None
+    # A device accepts one connection at a time, so actions targeting the same
+    # device are serialized instead of failing with a confusing connect error.
+    ble_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 type OpenDisplayConfigEntry = ConfigEntry[OpenDisplayRuntimeData]

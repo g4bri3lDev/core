@@ -68,3 +68,44 @@ upload_image:
               step: 1
               mode: slider
               unit_of_measurement: "%"
+activate_buzzer:
+  fields:
+    device_id:
+      required: true
+      selector:
+        device:
+          integration: opendisplay
+    instance:
+      required: false
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 3
+          mode: box
+    frequency_hz:
+      required: false
+      default: 1000
+      selector:
+        number:
+          min: 0
+          max: 12000
+          mode: box
+          unit_of_measurement: Hz
+    duration_ms:
+      required: false
+      default: 100
+      selector:
+        number:
+          min: 5
+          max: 1275
+          mode: box
+          unit_of_measurement: ms
+    repeats:
+      required: false
+      default: 1
+      selector:
+        number:
+          min: 1
+          max: 255
+          mode: box

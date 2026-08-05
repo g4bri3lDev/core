@@ -1,16 +1,19 @@
 """Service registration for the OpenDisplay integration."""
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
+import contextlib
 from datetime import timedelta
 from enum import IntEnum
 import io
 from typing import TYPE_CHECKING, Any
 
 import aiohttp
+from bleak.backends.device import BLEDevice
 from opendisplay import (
     AuthenticationFailedError,
     AuthenticationRequiredError,
+    BuzzerActivateConfig,
     DitherMode,
     FitMode,
     OpenDisplayDevice,
@@ -49,6 +52,10 @@ ATTR_DITHER_MODE = "dither_mode"
 ATTR_REFRESH_MODE = "refresh_mode"
 ATTR_FIT_MODE = "fit_mode"
 ATTR_TONE_COMPRESSION = "tone_compression"
+ATTR_INSTANCE = "instance"
+ATTR_FREQUENCY_HZ = "frequency_hz"
+ATTR_DURATION_MS = "duration_ms"
+ATTR_REPEATS = "repeats"
 
 
 def _str_to_int_enum(enum_class: type[IntEnum]) -> Callable[[str], Any]:
@@ -77,6 +84,25 @@ SCHEMA_UPLOAD_IMAGE = vol.Schema(
         vol.Optional(ATTR_FIT_MODE, default="contain"): _str_to_int_enum(FitMode),
         vol.Optional(ATTR_TONE_COMPRESSION): vol.All(
             vol.Coerce(float), vol.Range(min=0.0, max=100.0)
+        ),
+    }
+)
+
+
+SCHEMA_ACTIVATE_BUZZER = vol.Schema(
+    {
+        vol.Required(ATTR_DEVICE_ID): cv.string,
+        vol.Optional(ATTR_INSTANCE, default=0): vol.All(
+            vol.Coerce(int), vol.Range(min=0, max=3)
+        ),
+        vol.Optional(ATTR_FREQUENCY_HZ, default=1000): vol.All(
+            vol.Coerce(int), vol.Range(min=0, max=12000)
+        ),
+        vol.Optional(ATTR_DURATION_MS, default=100): vol.All(
+            vol.Coerce(int), vol.Range(min=5, max=1275)
+        ),
+        vol.Optional(ATTR_REPEATS, default=1): vol.All(
+            vol.Coerce(int), vol.Range(min=1, max=255)
         ),
     }
 )
@@ -153,11 +179,85 @@ async def _async_download_image(hass: HomeAssistant, url: str) -> PILImage.Image
     return await hass.async_add_executor_job(_load_image_from_bytes, data)
 
 
+def _encryption_key(hass: HomeAssistant, entry: OpenDisplayConfigEntry) -> bytes | None:
+    """Return the entry's encryption key, starting reauth if it is unusable."""
+    raw_key = entry.data.get(CONF_ENCRYPTION_KEY)
+    if raw_key is None:
+        return None
+
+    key: bytes | None = None
+    if len(raw_key) == 32:
+        with contextlib.suppress(ValueError):
+            key = bytes.fromhex(raw_key)
+    if key is None:
+        entry.async_start_reauth(hass)
+        raise HomeAssistantError(
+            translation_domain=DOMAIN, translation_key="authentication_error"
+        )
+    return key
+
+
+def _ble_device_or_raise(hass: HomeAssistant, address: str) -> BLEDevice:
+    """Return the BLE device for an address, or raise with a reachability reason."""
+    ble_device = async_ble_device_from_address(hass, address, connectable=True)
+    if ble_device is None:
+        raise HomeAssistantError(
+            translation_domain=DOMAIN,
+            translation_key="device_not_found",
+            translation_placeholders={
+                "address": address,
+                "reason": async_address_reachability_diagnostics(
+                    hass,
+                    address.upper(),
+                    BluetoothReachabilityIntent.CONNECTION,
+                ),
+            },
+        )
+    return ble_device
+
+
+async def _async_connect_and_run(
+    hass: HomeAssistant,
+    entry: OpenDisplayConfigEntry,
+    ble_device: BLEDevice,
+    action: Callable[[OpenDisplayDevice], Coroutine[Any, Any, None]],
+    error_translation_key: str,
+) -> None:
+    """Connect to the device and run one action against it."""
+    address = entry.unique_id
+    assert address is not None
+
+    encryption_key = _encryption_key(hass, entry)
+
+    try:
+        async with (
+            entry.runtime_data.ble_lock,
+            OpenDisplayDevice(
+                mac_address=address,
+                ble_device=ble_device,
+                config=entry.runtime_data.device_config,
+                encryption_key=encryption_key,
+            ) as device,
+        ):
+            await action(device)
+    except (AuthenticationFailedError, AuthenticationRequiredError) as err:
+        entry.async_start_reauth(hass)
+        raise HomeAssistantError(
+            translation_domain=DOMAIN, translation_key="authentication_error"
+        ) from err
+    except OpenDisplayError as err:
+        raise HomeAssistantError(
+            translation_domain=DOMAIN, translation_key=error_translation_key
+        ) from err
+
+
 async def _async_upload_image(call: ServiceCall) -> None:
     """Handle the upload_image service call."""
     entry = _get_entry_for_device(call)
     address = entry.unique_id
     assert address is not None
+    # Resolved up front so an unreachable device fails before the image is fetched.
+    ble_device = _ble_device_or_raise(call.hass, address)
 
     image_data: dict[str, Any] = call.data[ATTR_IMAGE]
     rotation: Rotation = call.data[ATTR_ROTATION]
@@ -168,21 +268,6 @@ async def _async_upload_image(call: ServiceCall) -> None:
     tone_compression: float | str = (
         tone_compression_pct / 100.0 if tone_compression_pct is not None else "auto"
     )
-
-    ble_device = async_ble_device_from_address(call.hass, address, connectable=True)
-    if ble_device is None:
-        raise HomeAssistantError(
-            translation_domain=DOMAIN,
-            translation_key="device_not_found",
-            translation_placeholders={
-                "address": address,
-                "reason": async_address_reachability_diagnostics(
-                    call.hass,
-                    address.upper(),
-                    BluetoothReachabilityIntent.CONNECTION,
-                ),
-            },
-        )
 
     current = asyncio.current_task()
     if (prev := entry.runtime_data.upload_task) is not None and not prev.done():
@@ -202,26 +287,7 @@ async def _async_upload_image(call: ServiceCall) -> None:
         else:
             pil_image = await _async_download_image(call.hass, media.url)
 
-        raw_key = entry.data.get(CONF_ENCRYPTION_KEY)
-        if raw_key is not None and len(raw_key) != 32:
-            entry.async_start_reauth(call.hass)
-            raise HomeAssistantError(
-                translation_domain=DOMAIN, translation_key="authentication_error"
-            )
-        try:
-            encryption_key = bytes.fromhex(raw_key) if raw_key is not None else None
-        except ValueError as err:
-            entry.async_start_reauth(call.hass)
-            raise HomeAssistantError(
-                translation_domain=DOMAIN, translation_key="authentication_error"
-            ) from err
-
-        async with OpenDisplayDevice(
-            mac_address=address,
-            ble_device=ble_device,
-            config=entry.runtime_data.device_config,
-            encryption_key=encryption_key,
-        ) as device:
+        async def _upload(device: OpenDisplayDevice) -> None:
             await device.upload_image(
                 pil_image,
                 refresh_mode=refresh_mode,
@@ -230,20 +296,42 @@ async def _async_upload_image(call: ServiceCall) -> None:
                 fit=fit_mode,
                 rotate=rotation,
             )
+
+        await _async_connect_and_run(
+            call.hass, entry, ble_device, _upload, "upload_error"
+        )
     except asyncio.CancelledError:
         return
-    except (AuthenticationFailedError, AuthenticationRequiredError) as err:
-        entry.async_start_reauth(call.hass)
-        raise HomeAssistantError(
-            translation_domain=DOMAIN, translation_key="authentication_error"
-        ) from err
-    except OpenDisplayError as err:
-        raise HomeAssistantError(
-            translation_domain=DOMAIN, translation_key="upload_error"
-        ) from err
     finally:
         if entry.runtime_data.upload_task is current:
             entry.runtime_data.upload_task = None
+
+
+async def _async_activate_buzzer(call: ServiceCall) -> None:
+    """Handle the activate_buzzer service call."""
+    entry = _get_entry_for_device(call)
+    if not entry.runtime_data.device_config.buzzers:
+        raise ServiceValidationError(
+            translation_domain=DOMAIN,
+            translation_key="no_buzzers",
+            translation_placeholders={"device_id": call.data[ATTR_DEVICE_ID]},
+        )
+
+    address = entry.unique_id
+    assert address is not None
+    ble_device = _ble_device_or_raise(call.hass, address)
+
+    instance: int = call.data[ATTR_INSTANCE]
+    buzzer_config = BuzzerActivateConfig.single_tone(
+        frequency_hz=call.data[ATTR_FREQUENCY_HZ],
+        duration_ms=call.data[ATTR_DURATION_MS],
+        repeats=call.data[ATTR_REPEATS],
+    )
+
+    async def _buzz(device: OpenDisplayDevice) -> None:
+        await device.activate_buzzer(instance, buzzer_config)
+
+    await _async_connect_and_run(call.hass, entry, ble_device, _buzz, "buzzer_error")
 
 
 @callback
@@ -254,4 +342,10 @@ def async_setup_services(hass: HomeAssistant) -> None:
         "upload_image",
         _async_upload_image,
         schema=SCHEMA_UPLOAD_IMAGE,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "activate_buzzer",
+        _async_activate_buzzer,
+        schema=SCHEMA_ACTIVATE_BUZZER,
     )

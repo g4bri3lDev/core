@@ -1,5 +1,8 @@
 {
   "services": {
+    "activate_buzzer": {
+      "service": "mdi:bell-ring"
+    },
     "upload_image": {
       "service": "mdi:image-move"
     }

@@ -15,6 +15,7 @@ from opendisplay import (
     SecurityConfig,
     SystemConfig,
 )
+from opendisplay.models.config import PassiveBuzzer
 
 from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 
@@ -211,6 +212,27 @@ def make_button_device_config(binary_inputs: list[BinaryInputs]) -> GlobalConfig
         power=DEVICE_CONFIG.power,
         displays=DEVICE_CONFIG.displays,
         binary_inputs=binary_inputs,
+    )
+
+
+def make_buzzer_device_config(count: int = 1) -> GlobalConfig:
+    """Return a GlobalConfig with the given number of passive buzzers."""
+    return GlobalConfig(
+        system=DEVICE_CONFIG.system,
+        manufacturer=DEVICE_CONFIG.manufacturer,
+        power=DEVICE_CONFIG.power,
+        displays=DEVICE_CONFIG.displays,
+        buzzers=[
+            PassiveBuzzer(
+                instance_number=instance,
+                drive_pin=1,
+                enable_pin=0xFF,
+                flags=0,
+                duty_percent=0,
+                reserved=b"\x00" * 27,
+            )
+            for instance in range(count)
+        ],
     )
 
 
