@@ -85,7 +85,9 @@ rules:
     status: exempt
     comment: Entities use device_class-derived icons; no custom icons are needed.
   reconfiguration-flow: todo
-  repair-issues: todo
+  repair-issues:
+    status: exempt
+    comment: No repairable issues are raised.
   stale-devices:
     status: exempt
     comment: One fixed inverter per config entry; nothing to detect as stale.

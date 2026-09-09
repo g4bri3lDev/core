@@ -94,6 +94,24 @@ async def test_another_brand_at_the_same_address_fails_permanently(
     assert mock_config_entry.state is ConfigEntryState.SETUP_ERROR
 
 
+@pytest.mark.usefixtures("mock_get_unit")
+async def test_another_kaco_at_the_same_address_fails_permanently(
+    hass: HomeAssistant, mock_config_entry: MockConfigEntry
+) -> None:
+    """Test an address that moved to a second KACO is refused.
+
+    A KACO answering is not enough: an address can move to another inverter,
+    whose readings would otherwise be published under this entry's entities.
+    """
+    mock_config_entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(mock_config_entry, unique_id="8.6TL99999999")
+
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert mock_config_entry.state is ConfigEntryState.SETUP_ERROR
+
+
 async def test_a_moved_sunspec_map_reloads_the_entry(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,

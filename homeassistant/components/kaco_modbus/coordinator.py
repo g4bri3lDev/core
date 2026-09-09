@@ -89,6 +89,17 @@ class KacoDataUpdateCoordinator(DataUpdateCoordinator[UpdateReport]):
                 translation_placeholders={"error": str(err)},
             ) from err
 
+        # A KACO answering here is not necessarily *this* KACO: an address can
+        # move to another inverter, and its readings are not this one's however
+        # the entities carrying them are named.
+        info = self.device.info
+        if info is not None and info.serial_number != self.config_entry.unique_id:
+            raise ConfigEntryError(
+                translation_domain=DOMAIN,
+                translation_key="wrong_inverter",
+                translation_placeholders={"serial_number": info.serial_number},
+            )
+
         if not report.updated:
             # A KACO after dark accepts the connection and answers nothing.
             # The library records that per component rather than raising it.

@@ -60,6 +60,9 @@
     },
     "sunspec_map_moved": {
       "message": "The inverter's SunSpec register map moved, so the integration is reloading to find it again: {error}"
+    },
+    "wrong_inverter": {
+      "message": "The inverter at this address reports serial number {serial_number}, which is not the one this entry was set up for."
     }
   }
 }
