@@ -7,6 +7,6 @@
   "documentation": "https://www.home-assistant.io/integrations/kaco_modbus",
   "integration_type": "device",
   "iot_class": "local_polling",
-  "quality_scale": "bronze",
+  "quality_scale": "platinum",
   "requirements": ["kaco-modbus==1.1.0"]
 }
